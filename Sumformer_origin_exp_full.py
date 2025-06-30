@@ -144,7 +144,19 @@ if __name__ == '__main__':
                         n_heads=args.n_heads,win_size=args.win_size,layer_scaler=args.layer_scaler,layer_type = args.layer_type,layer_depth = args.layer_depth)
 
     model.to(args.device)
-    # model.load_state_dict(torch.load(args.pth, map_location=args.device))
+    model.to(args.device)
+
+    # NOVO: Carrega o modelo pré-treinado APENAS se args.pretrain_pth for fornecido
+    # e se o arquivo existir.
+    if args.pretrain_pth and os.path.exists(args.pretrain_pth):
+        try:
+            model.load_state_dict(torch.load(args.pretrain_pth, map_location=args.device))
+            print(f"--- Modelo pré-treinado carregado de: {args.pretrain_pth} ---")
+        except Exception as e:
+            print(f"ERRO ao carregar modelo pré-treinado de {args.pretrain_pth}: {e}")
+            print("Continuando sem modelo pré-treinado ou com inicialização padrão.")
+    elif args.pretrain_pth: # Se o caminho foi dado, mas o arquivo não existe
+        print(f"AVISO: Arquivo pré-treinado '{args.pretrain_pth}' não encontrado. O modelo não será carregado a partir deste caminho.")
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total Parameters: {total_params}")
@@ -169,79 +181,113 @@ if __name__ == '__main__':
     test_minibatches = len(test_loader)
     begin_time = time.time()
 
-    for epoch in range(args.Epoch):
-        print("epoch: {}".format(epoch))
-        loss_cum = 0
-        for i, (inputs, target) in enumerate(train_loader):
-            inputs = inputs.to(args.device)
-            target = target.to(args.device)
-            model.train()
-            output = model(inputs,frozen=False)
-            loss = criteria(output, target)
-            if args.peak_loss:
-                p_loss = peak(output,target)
-                loss = loss+0.2*p_loss
-
-            loss = loss/args.accu_step
-            loss.backward()
-            # optimizer.step()
-            if (i+1)%args.accu_step==0:
-                optimizer.step()
-                optimizer.zero_grad()
-            loss_cum += loss.item()*args.accu_step
-            if i % 100 == 0:
-                end_time = time.time()
-                print("time comsuming: {}".format(end_time - begin_time))
-                print("training epoch:{}:{}%".format(epoch, i / train_minibatches * 100))
-        end_time = time.time()
-        print("time comsuming: {}".format(end_time - begin_time))
-        if optimizer.param_groups[0]['lr']>0.00015 or epoch<5:
-            scheduler.step(epoch)
-        # adjust_learning_rate(optimizer,epoch,args.lr)
-        print("Adam lr epoch:{} lr:{}".format(epoch, optimizer.param_groups[0]['lr']))
-        print("MSE loss :{}".format(loss_cum / train_minibatches))
-        with torch.cuda.device(args.device):
-            torch.cuda.empty_cache()
-        model.eval()
-        outputs = []
-        vals = []
-        with torch.no_grad():
-            for i, (inputs, val) in enumerate(val_loader):
+    # NOVO: Loop principal de treinamento e validação
+    # Este loop só executa se args.test for False
+    if not args.test:
+        print("\n--- Iniciando o Processo de Treinamento e Validação ---")
+        for epoch in range(args.Epoch):
+            print("epoch: {}".format(epoch))
+            loss_cum = 0
+            for i, (inputs, target) in enumerate(train_loader):
+                # ... (resto do seu código de treinamento, sem mudanças aqui) ...
                 inputs = inputs.to(args.device)
-                output = model(inputs)
-                outputs.append(output.detach().cpu().numpy())
-                vals.append(val.detach().numpy())
+                target = target.to(args.device)
+                model.train()
+                output = model(inputs,frozen=False)
+                loss = criteria(output, target)
+                if args.peak_loss:
+                    p_loss = peak(output,target)
+                    loss = loss+0.2*p_loss
+
+                loss = loss/args.accu_step
+                loss.backward()
+                # optimizer.step()
+                if (i+1)%args.accu_step==0:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                loss_cum += loss.item()*args.accu_step
                 if i % 100 == 0:
                     end_time = time.time()
                     print("time comsuming: {}".format(end_time - begin_time))
-                    print("test epoch:{}:{}%".format(epoch, i / val_minibatches * 100))
+                    print("training epoch:{}:{}%".format(epoch, i / train_minibatches * 100))
+            end_time = time.time()
+            print("time comsuming: {}".format(end_time - begin_time))
+            if optimizer.param_groups[0]['lr']>0.00015 or epoch<5:
+                scheduler.step(epoch)
+            # adjust_learning_rate(optimizer,epoch,args.lr)
+            print("Adam lr epoch:{} lr:{}".format(epoch, optimizer.param_groups[0]['lr']))
+            print("MSE loss :{}".format(loss_cum / train_minibatches))
+            with torch.cuda.device(args.device):
+                torch.cuda.empty_cache()
+            model.eval()
+            outputs = []
+            vals = []
+            with torch.no_grad():
+                for i, (inputs, val) in enumerate(val_loader):
+                    inputs = inputs.to(args.device)
+                    output = model(inputs)
+                    outputs.append(output.detach().cpu().numpy())
+                    vals.append(val.detach().numpy())
+                    if i % 100 == 0:
+                        end_time = time.time()
+                        print("time comsuming: {}".format(end_time - begin_time))
+                        print("test epoch:{}:{}%".format(epoch, i / val_minibatches * 100))
 
-        mse, mmae = MSE(np.concatenate(outputs), np.concatenate(vals)), MAE(np.concatenate(outputs),
-                                                                             np.concatenate(vals))
+            mse, mmae = MSE(np.concatenate(outputs), np.concatenate(vals)), MAE(np.concatenate(outputs),
+                                                                                    np.concatenate(vals))
 
-        outputs = de_normalized(np.concatenate(outputs), 'z_score', train_normalize_statistic)
-        outputs[outputs < 0] = 0  # physical limits
-        outputs = np.round(outputs)
-        vals = de_normalized(np.concatenate(vals), 'z_score', train_normalize_statistic)
-        mae, rmse, smape = MAE(outputs, vals), RMSE(outputs, vals), SMAPE(outputs, vals)
-        print('episode', epoch, 'mae', mae, 'rmse', rmse, 'smape', smape, 'mse', mse, 'mmae', mmae)
+            outputs = de_normalized(np.concatenate(outputs), 'z_score', train_normalize_statistic)
+            outputs[outputs < 0] = 0  # physical limits
+            outputs = np.round(outputs)
+            vals = de_normalized(np.concatenate(vals), 'z_score', train_normalize_statistic)
+            mae, rmse, smape = MAE(outputs, vals), RMSE(outputs, vals), SMAPE(outputs, vals)
+            print('episode', epoch, 'mae', mae, 'rmse', rmse, 'smape', smape, 'mse', mse, 'mmae', mmae)
 
-        MSE_list.append(rmse)
-        if rmse == min(MSE_list):
-            torch.save(model.state_dict(), args.pth)
+            MSE_list.append(rmse)
+            if rmse == min(MSE_list):
+                torch.save(model.state_dict(), args.pth)
+            plot(MSE_list, args.pth[:-4])
+            with torch.cuda.device(args.device):
+                torch.cuda.empty_cache()
+            # if epoch%5==1:
+            #     model.load_state_dict(torch.load(args.pth, map_location=args.device))
         plot(MSE_list, args.pth[:-4])
-        with torch.cuda.device(args.device):
-            torch.cuda.empty_cache()
-        # if epoch%5==1:
-        #     model.load_state_dict(torch.load(args.pth, map_location=args.device))
-    plot(MSE_list, args.pth[:-4])
+    else: # <--- Adicione este bloco 'else'
+        print("\n--- Modo de Teste Ativado. Pulando Treinamento. ---")
 
     '''
     Testing
     '''
+    # O restante do bloco 'Testing' já está correto e será executado
+    # após o loop de treinamento (ou imediatamente se args.test for True)
     outputs = []
     tests = []
-    model.load_state_dict(torch.load(args.pth, map_location=args.device))
+    # ESTA LINHA VAI CARREGAR O MELHOR MODELO SALVO DURANTE O TREINAMENTO.
+    # Se você está apenas TESTANDO um modelo pré-treinado, certifique-se de que
+    # args.pth aponte para o modelo que você quer testar, ou que
+    # o modelo já carregado por `pretrain_pth` seja usado aqui.
+    # A forma mais segura é carregar o modelo explicitamente para o teste final
+    # SE o modo de teste estiver ativado e nenhum treinamento ocorreu.
+    # Vamos garantir que ele carrega o `pretrain_pth` no final do teste também se `--test` for True.
+
+    if args.test and args.pretrain_pth and os.path.exists(args.pretrain_pth):
+        # Se estamos no modo de teste e `pretrain_pth` foi fornecido,
+        # recarregue o modelo pré-treinado para o teste final,
+        # caso ele tenha sido sobrescrito ou se o script
+        # não o manteve na memória corretamente.
+        try:
+            model.load_state_dict(torch.load(args.pretrain_pth, map_location=args.device))
+            print(f"--- Recarregando modelo pré-treinado para teste final de: {args.pretrain_pth} ---")
+        except Exception as e:
+            print(f"ERRO ao recarregar modelo pré-treinado para teste final de {args.pretrain_pth}: {e}")
+            print("Prosseguindo com o modelo atual na memória (pode estar sem os pesos pré-treinados).")
+    elif not args.test:
+        # Se houve treinamento, carregue o melhor modelo salvo pelo treinamento.
+        # args.pth é o caminho onde o melhor modelo treinado foi salvo.
+        print(f"--- Carregando melhor modelo treinado de: {args.pth} para teste final ---")
+        model.load_state_dict(torch.load(args.pth, map_location=args.device))
+
+
     model.eval()
     with torch.no_grad():
         for i, (inputs, test) in enumerate(test_loader):
@@ -251,7 +297,15 @@ if __name__ == '__main__':
             tests.append(test.detach().numpy())
 
     mse, mmae = MSE(np.concatenate(outputs), np.concatenate(tests)), MAE(np.concatenate(outputs),
-                                                                         np.concatenate(tests))
+                                                                        np.concatenate(tests))
+
+    outputs = de_normalized(np.concatenate(outputs), 'z_score', train_normalize_statistic)
+    outputs[outputs < 0] = 0  # physical limits
+    outputs = np.round(outputs)
+    tests = de_normalized(np.concatenate(tests), 'z_score', train_normalize_statistic)
+
+    mae, rmse, smape = MAE(outputs, tests), RMSE(outputs, tests), SMAPE(outputs, tests)
+    print('mae', mae, 'rmse', rmse, 'smape', smape, 'mse', mse, 'mmae', mmae)
 
     outputs = de_normalized(np.concatenate(outputs), 'z_score', train_normalize_statistic)
     outputs[outputs < 0] = 0  # physical limits
