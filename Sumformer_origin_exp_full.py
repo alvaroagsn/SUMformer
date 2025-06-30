@@ -4,7 +4,7 @@ import torch
 from torch import optim
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from datasets.PeMS_dataset import de_normalized, ForecastGrid
+from PeMS_dataset import de_normalized, ForecastGrid
 # from model.CNN.Ours_origin import SimVP_Model
 from model.sumformer.sumformer import Sumformer
 # from model.sumformer.sumformer_vit import Sumformer
