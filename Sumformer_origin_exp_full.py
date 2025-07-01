@@ -11,6 +11,7 @@ from model.sumformer.sumformer import Sumformer
 from utils.metrics import MAE, RMSE, SMAPE, MSE
 # from plot.plot_TS import plot_12
 import time
+from SharpLoss.dilate_loss import DTWShpTime
 
 from timm.scheduler.cosine_lr import CosineLRScheduler
 import os
@@ -73,6 +74,9 @@ parser.add_argument('--Peak_eval',action='store_true')
 parser.add_argument('--accu_step',type=int,default=1,help='accumulative loss steps for saving memory')
 parser.add_argument('--layer_type',type=str,default='AD',help='choose the variant type for SUMformer:{AD,MD,AL,AA,AF,TS}')
 parser.add_argument('--layer_depth', default=[2,2,6,2], type=int,nargs='*',help ='The depth for each TVF block')
+parser.add_argument('--sharp_loss', action='store_true', help='Ativar o uso da SharpLoss.')
+parser.add_argument('--sharp_loss_alpha', type=float, default=0.5, help='Parâmetro alfa para a SharpLoss.')
+parser.add_argument('--sharp_loss_gamma', type=float, default=0.01, help='Parâmetro gama para a SharpLoss.')
 args = parser.parse_args()
 
 def adjust_learning_rate(optimizer, epoch, learning_rate):
@@ -164,6 +168,10 @@ if __name__ == '__main__':
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     criteria = nn.MSELoss()
     peak = peak_loss(48,spatial=True)
+
+    if args.sharp_loss:
+        sharp_loss_function = DTWShpTime(alpha=args.sharp_loss_alpha, gamma=args.sharp_loss_gamma)
+    
     scheduler = CosineLRScheduler(
         optimizer,
         t_initial=args.Epoch,
@@ -189,16 +197,20 @@ if __name__ == '__main__':
             print("epoch: {}".format(epoch))
             loss_cum = 0
             for i, (inputs, target) in enumerate(train_loader):
-                # ... (resto do seu código de treinamento, sem mudanças aqui) ...
                 inputs = inputs.to(args.device)
                 target = target.to(args.device)
                 model.train()
                 output = model(inputs,frozen=False)
                 loss = criteria(output, target)
+
+                if args.sharp_loss:
+                    sharp_loss_val, _, _ = sharp_loss_function(output, target)
+                    loss = loss + sharp_loss_val 
+
                 if args.peak_loss:
                     p_loss = peak(output,target)
                     loss = loss+0.2*p_loss
-
+                
                 loss = loss/args.accu_step
                 loss.backward()
                 # optimizer.step()
