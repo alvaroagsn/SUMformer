@@ -72,7 +72,7 @@ parser.add_argument('--peak_loss', action='store_true', help='Set this flag to T
 parser.add_argument('--layer_scaler',type=float,default=1)
 parser.add_argument('--Peak_eval',action='store_true')
 parser.add_argument('--accu_step',type=int,default=1,help='accumulative loss steps for saving memory')
-parser.add_argument('--layer_type',type=str,default='AD',help='choose the variant type for SUMformer:{AD,MD,AL,AA,AF,TS}')
+parser.add_argument('--layer_type',type=str,default='AF',help='choose the variant type for SUMformer:{AD,MD,AL,AA,AF,TS}')
 parser.add_argument('--layer_depth', default=[2,2,6,2], type=int,nargs='*',help ='The depth for each TVF block')
 parser.add_argument('--sharp_loss', action='store_true', help='Ativar o uso da SharpLoss.')
 parser.add_argument('--sharp_loss_alpha', type=float, default=0.5, help='Parâmetro alfa para a SharpLoss.')
