@@ -191,42 +191,40 @@ if __name__ == '__main__':
         for epoch in range(args.Epoch):
             print("epoch: {}".format(epoch))
             loss_cum = 0
+            model.train() # Garante que o modelo está em modo de treino
             for i, (inputs, target) in enumerate(train_loader):
                 inputs = inputs.to(args.device)
                 target = target.to(args.device)
-                model.train()
+                
                 output = model(inputs,frozen=False)
                 loss = criteria(output, target)
-
+                
+                # Aplica as perdas adicionais se ativadas
                 if args.sharp_loss:
                     sharp_loss_val, _, _ = sharp_loss_function(output, target)
-                    loss = loss + sharp_loss_val 
-
+                    loss += sharp_loss_val
                 if args.peak_loss:
                     p_loss = peak(output,target)
-                    loss = loss+0.2*p_loss
+                    loss = loss + 0.2 * p_loss
                 
-                loss = loss/args.accu_step
+                loss = loss / args.accu_step
                 loss.backward()
-                # optimizer.step()
-                if (i+1)%args.accu_step==0:
+                
+                if (i + 1) % args.accu_step == 0:
                     optimizer.step()
                     optimizer.zero_grad()
-                loss_cum += loss.item()*args.accu_step
+                
+                loss_cum += loss.item() * args.accu_step
+                
                 if i % 100 == 0:
-                    end_time = time.time()
-                    print("time comsuming: {}".format(end_time - begin_time))
                     print("training epoch:{}:{}%".format(epoch, i / train_minibatches * 100))
-            end_time = time.time()
-            print("time comsuming: {}".format(end_time - begin_time))
-            if optimizer.param_groups[0]['lr']>0.00015 or epoch<5:
-                scheduler.step(mse)
-            # adjust_learning_rate(optimizer,epoch,args.lr)
-            print("Adam lr epoch:{} lr:{}".format(epoch, optimizer.param_groups[0]['lr']))
-            print("MSE loss :{}".format(loss_cum / train_minibatches))
+
+            print("MSE loss de treino :{}".format(loss_cum / train_minibatches))
             with torch.cuda.device(args.device):
                 torch.cuda.empty_cache()
-            model.eval()
+            
+            # --- Início do Loop de Validação ---
+            model.eval() # Coloca o modelo em modo de avaliação
             outputs = []
             vals = []
             with torch.no_grad():
@@ -235,29 +233,42 @@ if __name__ == '__main__':
                     output = model(inputs)
                     outputs.append(output.detach().cpu().numpy())
                     vals.append(val.detach().numpy())
-                    if i % 100 == 0:
-                        end_time = time.time()
-                        print("time comsuming: {}".format(end_time - begin_time))
-                        print("test epoch:{}:{}%".format(epoch, i / val_minibatches * 100))
 
-            mse, mmae = MSE(np.concatenate(outputs), np.concatenate(vals)), MAE(np.concatenate(outputs),
-                                                                                    np.concatenate(vals))
+            # --- Cálculo das Métricas de Validação ---
+            outputs_np = np.concatenate(outputs)
+            vals_np = np.concatenate(vals)
+            
+            mse, mmae = MSE(outputs_np, vals_np), MAE(outputs_np, vals_np)
+            
+            # Desnormalização para métricas interpretáveis
+            outputs_denorm = de_normalized(outputs_np, 'z_score', train_normalize_statistic)
+            outputs_denorm[outputs_denorm < 0] = 0
+            outputs_denorm = np.round(outputs_denorm)
+            vals_denorm = de_normalized(vals_np, 'z_score', train_normalize_statistic)
+            
+            mae, rmse, smape = MAE(outputs_denorm, vals_denorm), RMSE(outputs_denorm, vals_denorm), SMAPE(outputs_denorm, vals_denorm)
+            print('--- Validação Época', epoch, '---')
+            print('mae', mae, 'rmse', rmse, 'smape', smape)
+            print('mse (normalizado)', mse, 'mmae (normalizado)', mmae)
 
-            outputs = de_normalized(np.concatenate(outputs), 'z_score', train_normalize_statistic)
-            outputs[outputs < 0] = 0  # physical limits
-            outputs = np.round(outputs)
-            vals = de_normalized(np.concatenate(vals), 'z_score', train_normalize_statistic)
-            mae, rmse, smape = MAE(outputs, vals), RMSE(outputs, vals), SMAPE(outputs, vals)
-            print('episode', epoch, 'mae', mae, 'rmse', rmse, 'smape', smape, 'mse', mse, 'mmae', mmae)
+            # --- PONTO CORRETO PARA O SCHEDULER STEP ---
+            # O scheduler é atualizado com base no erro de validação (mse normalizado)
+            if args.sched == 'plateau': # Supondo que você use um arg para escolher
+                scheduler.step(mse)
+            else: # Mantém o scheduler de cosseno como padrão
+                scheduler.step(epoch)
 
+            print("LR atual: {}".format(optimizer.param_groups[0]['lr']))
+            
             MSE_list.append(rmse)
             if rmse == min(MSE_list):
+                print("--- Novo melhor modelo encontrado! Salvando... ---")
                 torch.save(model.state_dict(), args.pth)
+            
             plot(MSE_list, args.pth[:-4])
             with torch.cuda.device(args.device):
                 torch.cuda.empty_cache()
-            # if epoch%5==1:
-            #     model.load_state_dict(torch.load(args.pth, map_location=args.device))
+        
         plot(MSE_list, args.pth[:-4])
     else: # <--- Adicione este bloco 'else'
         print("\n--- Modo de Teste Ativado. Pulando Treinamento. ---")
