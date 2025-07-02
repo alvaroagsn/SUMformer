@@ -12,6 +12,7 @@ from utils.metrics import MAE, RMSE, SMAPE, MSE
 # from plot.plot_TS import plot_12
 import time
 from SharpLoss.dilate_loss import DTWShpTime
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from timm.scheduler.cosine_lr import CosineLRScheduler
 import os
@@ -42,7 +43,7 @@ parser.add_argument("--train_val_ratio", nargs="+", default=[0.7, 0.2], help='tr
 parser.add_argument('--batch', type=int, default=16, help='training batch size')
 parser.add_argument('--warmup_lr', type=float, default=1e-5, help='warmup_lr')
 parser.add_argument('--warmup_epoch', type=int, default=5, help='warmup_epoch')
-parser.add_argument('--drop_path', type=float, default=0.1, help='drop_path')
+parser.add_argument('--drop_path', type=float, default=0.2, help='drop_path')
 parser.add_argument('--sched', type=str, default='cosine', help='training schedule')
 parser.add_argument('--spatio_kernel_enc', type=int, default=3, help='encoder spatial kernel size')
 parser.add_argument('--spatio_kernel_dec', type=int, default=3, help='decoder spatial kernel size')
@@ -172,13 +173,7 @@ if __name__ == '__main__':
     if args.sharp_loss:
         sharp_loss_function = DTWShpTime(alpha=args.sharp_loss_alpha, gamma=args.sharp_loss_gamma)
     
-    scheduler = CosineLRScheduler(
-        optimizer,
-        t_initial=args.Epoch,
-        warmup_lr_init=args.warmup_lr,
-        warmup_t=args.warmup_epoch,
-        t_in_epochs=True  # update lr by_epoch(True) steps(False)
-    )
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True, min_lr=1e-6)
     MSE_list = []
 
     '''
@@ -225,7 +220,7 @@ if __name__ == '__main__':
             end_time = time.time()
             print("time comsuming: {}".format(end_time - begin_time))
             if optimizer.param_groups[0]['lr']>0.00015 or epoch<5:
-                scheduler.step(epoch)
+                scheduler.step(mse)
             # adjust_learning_rate(optimizer,epoch,args.lr)
             print("Adam lr epoch:{} lr:{}".format(epoch, optimizer.param_groups[0]['lr']))
             print("MSE loss :{}".format(loss_cum / train_minibatches))
